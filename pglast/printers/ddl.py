@@ -3,15 +3,13 @@
 # :Created:   gio 09 nov 2017 10:50:30 CET
 # :Author:    Lele Gaifax <lele@metapensiero.it>
 # :License:   GNU General Public License version 3 or later
-# :Copyright: © 2017, 2018, 2019, 2020 Lele Gaifax
+# :Copyright: © 2017, 2018, 2019 Lele Gaifax
 #
-
-import re
 
 from .. import enums
 from ..node import Missing, List, Node
 from ..printer import node_printer
-from . import IntEnumPrinter
+import re
 
 
 @node_printer("AccessPriv")
@@ -55,7 +53,6 @@ OBJECT_NAMES = {
     enums.ObjectType.OBJECT_OPERATOR: 'OPERATOR',
     enums.ObjectType.OBJECT_OPFAMILY: 'OPERATOR FAMILY',
     enums.ObjectType.OBJECT_POLICY: 'POLICY',
-    enums.ObjectType.OBJECT_PROCEDURE: 'PROCEDURE',
     enums.ObjectType.OBJECT_PUBLICATION: 'PUBLICATION',
     enums.ObjectType.OBJECT_PUBLICATION_REL: 'PUBLICATION_REL',
     enums.ObjectType.OBJECT_ROLE: 'ROLE',
@@ -98,21 +95,33 @@ def alter_enum_stmt(node, output):
     output.write("ALTER TYPE ")
     output.print_name(node.typeName)
     if node.newVal:
-        if node.oldVal:
-            output.write("RENAME VALUE ")
-            output.write_quoted_string(node.oldVal.value)
-            output.write("TO ")
-        else:
-            output.write("ADD VALUE ")
-            if node.skipIfNewValExists:
-                output.write("IF NOT EXISTS ")
-        output.write_quoted_string(node.newVal.value)
+        output.write("ADD VALUE ")
+        if node.skipIfNewValExists:
+            output.write("IF NOT EXISTS ")
+        output._write_quoted_string(node.newVal.value)
     if node.newValNeighbor:
         if node.newValIsAfter:
             output.write(" AFTER ")
         else:
             output.write(" BEFORE ")
-        output.write_quoted_string(node.newValNeighbor.value)
+        output._write_quoted_string(node.newValNeighbor.value)
+
+
+GRANT_OBJECT_TYPES_NAMES = {
+    enums.GrantObjectType.ACL_OBJECT_COLUMN: 'COLUMN',
+    enums.GrantObjectType.ACL_OBJECT_RELATION: 'TABLE',
+    enums.GrantObjectType.ACL_OBJECT_SEQUENCE: 'SEQUENCE',
+    enums.GrantObjectType.ACL_OBJECT_DATABASE: 'DATABASE',
+    enums.GrantObjectType.ACL_OBJECT_DOMAIN: 'DOMAIN',
+    enums.GrantObjectType.ACL_OBJECT_FDW: 'FOREIGN DATA WRAPPER',
+    enums.GrantObjectType.ACL_OBJECT_FOREIGN_SERVER: 'SERVER',
+    enums.GrantObjectType.ACL_OBJECT_FUNCTION: 'FUNCTION',
+    enums.GrantObjectType.ACL_OBJECT_LANGUAGE: 'LANGUAGE',
+    enums.GrantObjectType.ACL_OBJECT_LARGEOBJECT: 'LARGEOBJECT',
+    enums.GrantObjectType.ACL_OBJECT_NAMESPACE: 'SCHEMA',
+    enums.GrantObjectType.ACL_OBJECT_TABLESPACE: 'TABLESPACE',
+    enums.GrantObjectType.ACL_OBJECT_TYPE: 'TYPE'
+}
 
 
 @node_printer('AlterDefaultPrivilegesStmt')
@@ -154,7 +163,7 @@ def alter_default_privileges_stmt(node, output):
         else:
             output.write('ALL PRIVILEGES')
         output.write(' ON ')
-        output.write(OBJECT_NAMES[action.objtype.value])
+        output.write(GRANT_OBJECT_TYPES_NAMES[action.objtype.value])
         output.write('S ')
         output.writes(preposition)
         output.print_list(action.grantees, ',')
@@ -165,11 +174,7 @@ def alter_default_privileges_stmt(node, output):
 
 @node_printer('AlterFunctionStmt')
 def alter_function_stmt(node, output):
-    output.write('ALTER ')
-    if node.objtype == enums.ObjectType.OBJECT_PROCEDURE:
-        output.write('PROCEDURE ')
-    else:
-        output.write('FUNCTION ')
+    output.write('ALTER FUNCTION ')
     output.print_node(node.func)
     output.print_list(node.actions, ' ')
 
@@ -247,23 +252,79 @@ def alter_table_stmt(node, output):
     output.print_list(node.cmds, ',', standalone_items=True)
 
 
-class AlterTableTypePrinter(IntEnumPrinter):
-    enum = enums.AlterTableType
+@node_printer('AlterTableCmd')
+def alter_table_cmd(node, output):
+    cmdtype = node.subtype
 
-    def AT_AddColumn(self, node, output):
-        output.write("ADD COLUMN ")
-        if node.missing_ok:
-            output.write('IF NOT EXISTS ')
+    if cmdtype == enums.AlterTableType.AT_ChangeOwner:
+        output.write("OWNER TO ")
+        output.print_name(node.newowner)
+        return
+
+    if cmdtype == enums.AlterTableType.AT_SetStatistics:
+        output.write("ALTER COLUMN ")
+        output.print_name(node.name)
+        output.write(" SET STATISTICS ")
         output.print_node(node['def'])
+        return
 
-    def AT_AddConstraint(self, node, output):
+    if cmdtype == enums.AlterTableType.AT_ColumnDefault:
+        output.write("ALTER COLUMN ")
+        output.print_name(node.name)
+        if node['def']:
+            output.write(" SET DEFAULT ")
+            output.print_node(node['def'])
+        else:
+            output.write(" DROP DEFAULT ")
+        return
+
+    if cmdtype == enums.AlterTableType.AT_AddConstraint:
         output.write("ADD ")
         constraint = node['def']
         output.print_node(constraint)
         # Patch this into pglast.printers.ddl.constraint
         # TODO: understand the meaning of the prev comment
+        return
 
-    def AT_AlterColumnType(self, node, output):
+    if cmdtype == enums.AlterTableType.AT_DropConstraint:
+        output.write("DROP CONSTRAINT ")
+        if node.missing_ok:
+            output.write("IF EXISTS ")
+        output.print_name(node.name)
+        return
+
+    if cmdtype == enums.AlterTableType.AT_ClusterOn:
+        output.write("CLUSTER ON ")
+        output.print_name(node.name)
+        return
+
+    if cmdtype == enums.AlterTableType.AT_EnableRowSecurity:
+        output.write(" ENABLE ROW LEVEL SECURITY ")
+        return
+
+    if cmdtype == enums.AlterTableType.AT_DisableRowSecurity:
+        output.write(" DISABLE ROW LEVEL SECURITY ")
+        return
+
+    if cmdtype == enums.AlterTableType.AT_AddColumn:
+        output.write("ADD COLUMN ")
+        if node.missing_ok:
+            output.write('IF NOT EXISTS ')
+        output.print_node(node['def'])
+        return
+
+    if cmdtype == enums.AlterTableType.AT_ValidateConstraint:
+        output.write("VALIDATE CONSTRAINT ")
+        output.print_name(node.name)
+        return
+
+    if cmdtype == enums.AlterTableType.AT_DropNotNull:
+        output.write("ALTER COLUMN ")
+        output.print_name(node.name)
+        output.write(" DROP NOT NULL ")
+        return
+
+    if cmdtype == enums.AlterTableType.AT_AlterColumnType:
         output.write("ALTER COLUMN ")
         output.print_name(node.name)
         output.write(" TYPE ")
@@ -272,100 +333,40 @@ class AlterTableTypePrinter(IntEnumPrinter):
         if columndef.raw_default:
             output.write('USING ')
             output.print_node(columndef.raw_default)
+        return
 
-    def AT_ChangeOwner(self, node, output):
-        output.write("OWNER TO ")
-        output.print_name(node.newowner)
-
-    def AT_ClusterOn(self, node, output):
-        output.write("CLUSTER ON ")
-        output.print_name(node.name)
-
-    def AT_ColumnDefault(self, node, output):
-        output.write("ALTER COLUMN ")
-        output.print_name(node.name)
-        if node['def']:
-            output.write(" SET DEFAULT ")
-            output.print_node(node['def'])
-        else:
-            output.write(" DROP DEFAULT ")
-
-    def AT_DisableRowSecurity(self, node, output):
-        output.write(" DISABLE ROW LEVEL SECURITY ")
-
-    def AT_DisableTrig(self, node, output):
-        output.write("DISABLE TRIGGER ")
-        output.print_name(node.name)
-
-    def AT_DropColumn(self, node, output):
+    if cmdtype == enums.AlterTableType.AT_DropColumn:
         output.write("DROP COLUMN ")
         if node.missing_ok:
             output.write("IF EXISTS ")
         output.print_name(node.name)
         if node.behavior == enums.DropBehavior.DROP_CASCADE:
             output.write("CASCADE ")
+        return
 
-    def AT_DropConstraint(self, node, output):
-        output.write("DROP CONSTRAINT ")
-        if node.missing_ok:
-            output.write("IF EXISTS ")
-        output.print_name(node.name)
-
-    def AT_DropNotNull(self, node, output):
-        output.write("ALTER COLUMN ")
-        output.print_name(node.name)
-        output.write(" DROP NOT NULL ")
-
-    def AT_EnableRowSecurity(self, node, output):
-        output.write(" ENABLE ROW LEVEL SECURITY ")
-
-    def AT_EnableTrig(self, node, output):
-        output.write("ENABLE TRIGGER ")
-        output.print_name(node.name)
-
-    def AT_SetNotNull(self, node, output):
+    if cmdtype == enums.AlterTableType.AT_SetNotNull:
         output.write("ALTER COLUMN ")
         output.print_name(node.name)
         output.write(" SET NOT NULL")
+        return
 
-    def AT_SetStatistics(self, node, output):
-        output.write("ALTER COLUMN ")
-        if node.name:
-            output.print_name(node.name)
-        elif node.num:
-            output.write(str(node.num.value))
-        output.write(" SET STATISTICS ")
-        output.print_node(node['def'])
-
-    def AT_SetStorage(self, node, output):
-        output.write("ALTER COLUMN ")
+    if cmdtype == enums.AlterTableType.AT_EnableTrig:
+        output.write("ENABLE TRIGGER ")
         output.print_name(node.name)
-        output.write(" SET STORAGE ")
-        output.write(node['def'].string_value)
+        return
 
-    def AT_ValidateConstraint(self, node, output):
-        output.write("VALIDATE CONSTRAINT ")
+    if cmdtype == enums.AlterTableType.AT_DisableTrig:
+        output.write("DISABLE TRIGGER ")
         output.print_name(node.name)
+        return
 
-    def AT_SetUnLogged(self, node, output):
-        output.write("SET UNLOGGED")
-
-    def AT_SetLogged(self, node, output):
-        output.write("SET LOGGED")
-
-
-alter_table_type_printer = AlterTableTypePrinter()
-
-
-@node_printer('AlterTableCmd')
-def alter_table_cmd(node, output):
-    alter_table_type_printer(node.subtype, node, output)
+    raise NotImplementedError("Unsupported alter table cmd: %s" % cmdtype)  # pragma: nocover
 
 
 @node_printer('ClusterStmt')
 def cluster_stmt(node, output):
     output.write('CLUSTER ')
-    if (node.options or 0) & enums.ClusterOption.CLUOPT_VERBOSE:
+    if node.verbose:
         output.write('VERBOSE ')
     output.print_name(node.relation)
     output.write(' USING ')
@@ -433,7 +434,7 @@ def comment_stmt(node, output):
     output.space(2)
     output.write('IS ')
     with output.push_indent():
-        output.write_quoted_string(node.comment.value)
+        output._write_quoted_string(node.comment.value)
 
 
 @node_printer('CompositeTypeStmt')
@@ -447,31 +448,34 @@ def composite_type_stmt(node, output):
     node.typevar.parse_tree.pop('inh')
 
 
-class ConstrTypePrinter(IntEnumPrinter):
-    enum = enums.ConstrType
-
-    def CONSTR_ATTR_DEFERRABLE(self, node, output):
-        output.swrite('DEFERRABLE')
-
-    def CONSTR_ATTR_DEFERRED(self, node, output):
-        output.swrite('INITIALLY DEFERRED')
-
-    def CONSTR_CHECK(self, node, output):
-        output.swrite('CHECK (')
-        output.print_node(node.raw_expr or node.cooked_expr)
-        output.write(')')
-        if node.is_no_inherit:
-            output.swrite('NO INHERIT')
-
-    def CONSTR_DEFAULT(self, node, output):
+@node_printer('Constraint')
+def constraint(node, output):
+    if node.conname:
+        output.swrite('CONSTRAINT ')
+        output.print_name(node.conname)
+    ct = enums.ConstrType
+    if node.contype == ct.CONSTR_NULL:
+        output.swrite('NULL')
+    elif node.contype == ct.CONSTR_DEFAULT:
         output.swrite('DEFAULT ')
         # """
         # we may have the expression in either "raw" form [...]  or "cooked" form [...]
         # should never have both in the same node!
         # """
         output.print_node(node.raw_expr or node.cooked_expr)
-
-    def CONSTR_EXCLUSION(self, node, output):
+    elif node.contype == ct.CONSTR_NOTNULL:
+        output.swrite('NOT NULL')
+    elif node.contype == ct.CONSTR_CHECK:
+        output.swrite('CHECK (')
+        output.print_node(node.raw_expr or node.cooked_expr)
+        output.write(')')
+        if node.is_no_inherit:
+            output.swrite('NO INHERIT')
+    elif node.contype == ct.CONSTR_PRIMARY:
+        output.swrite('PRIMARY KEY')
+    elif node.contype == ct.CONSTR_UNIQUE:
+        output.swrite('UNIQUE')
+    elif node.contype == ct.CONSTR_EXCLUSION:
         output.swrite('EXCLUDE USING ')
         if node.access_method:
             output.print_node(node.access_method)
@@ -487,8 +491,11 @@ class ConstrTypePrinter(IntEnumPrinter):
             output.swrite('WITH ')
             output.write(clauses.string_value)
         output.write(')')
-
-    def CONSTR_FOREIGN(self, node, output):
+    elif node.contype == ct.CONSTR_ATTR_DEFERRABLE:
+        output.swrite('DEFERRABLE')
+    elif node.contype == ct.CONSTR_ATTR_DEFERRED:
+        output.swrite('INITIALLY DEFERRED')
+    elif node.contype == ct.CONSTR_FOREIGN:
         if node.fk_attrs:
             output.swrite('FOREIGN KEY ')
             output.write(' (')
@@ -531,30 +538,6 @@ class ConstrTypePrinter(IntEnumPrinter):
             output.swrite('DEFERRABLE')
             if node.initdeferred:
                 output.swrite('INITIALLY DEFERRED')
-
-    def CONSTR_NOTNULL(self, node, output):
-        output.swrite('NOT NULL')
-
-    def CONSTR_NULL(self, node, output):
-        output.swrite('NULL')
-
-    def CONSTR_PRIMARY(self, node, output):
-        output.swrite('PRIMARY KEY')
-
-    def CONSTR_UNIQUE(self, node, output):
-        output.swrite('UNIQUE')
-
-
-constr_type_printer = ConstrTypePrinter()
-
-
-@node_printer('Constraint')
-def constraint(node, output):
-    if node.conname:
-        output.swrite('CONSTRAINT ')
-        output.print_name(node.conname)
-
-    constr_type_printer(node.contype, node, output)
 
     if node.indexname:
         output.write(' USING INDEX ')
@@ -793,10 +776,7 @@ def create_function_stmt(node, output):
     output.write('CREATE ')
     if node.replace:
         output.write('OR REPLACE ')
-    if node.is_procedure:
-        output.write('PROCEDURE ')
-    else:
-        output.write('FUNCTION ')
+    output.write('FUNCTION ')
     output.print_name(node.funcname)
     output.write('(')
 
@@ -1113,9 +1093,16 @@ def create_stmt(node, output):
                 first = False
             else:
                 output.newline()
-            output.write(' WITH (')
-            output.print_list(node.options)
-            output.write(')')
+            if len(node.options) == 1 and node.options[0].defname == 'oids':
+                output.write(' WITH')
+                if node.options[0].arg.ival.value == 0:
+                    output.write
+                    output.write('OUT')
+                output.write(' OIDS')
+            else:
+                output.write(' WITH (')
+                output.print_list(node.options)
+                output.write(')')
         if node.oncommit != enums.OnCommitAction.ONCOMMIT_NOOP:
             if first:
                 first = False
@@ -1135,9 +1122,6 @@ def create_stmt(node, output):
                 output.newline()
             output.write(' TABLESPACE ')
             output.print_name(node.tablespacename)
-    if node.accessMethod:
-        output.write(' USING ')
-        output.write(node.accessMethod.value)
 
 
 @node_printer('CreateTableAsStmt')
@@ -1330,29 +1314,20 @@ def define_stmt_def_elem(node, output):
         raise NotImplementedError
 
 
-class DiscardModePrinter(IntEnumPrinter):
-    enum = enums.DiscardMode
-
-    def DISCARD_ALL(self, node, output):
-        output.write('ALL')
-
-    def DISCARD_PLANS(self, node, output):
-        output.write('PLANS')
-
-    def DISCARD_SEQUENCES(self, node, output):
-        output.write('SEQUENCES')
-
-    def DISCARD_TEMP(self, node, output):
-        output.write('TEMP')
-
-
-discard_mode_printer = DiscardModePrinter()
-
-
 @node_printer('DiscardStmt')
 def discard_stmt(node, output):
     output.write('DISCARD ')
-    discard_mode_printer(node.target, node, output)
+    if node.target == enums.DiscardMode.DISCARD_ALL:
+        output.write('ALL')
+    elif node.target == enums.DiscardMode.DISCARD_PLANS:
+        output.write('PLANS')
+    elif node.target == enums.DiscardMode.DISCARD_SEQUENCES:
+        output.write('SEQUENCES')
+    elif node.target == enums.DiscardMode.DISCARD_TEMP:
+        output.write('TEMP')
+    else:
+        raise NotImplementedError('Invalid target for discard: %s' %
+                                  node.target)
 
 
 @node_printer('DoStmt')
@@ -1393,7 +1368,6 @@ def drop_role_stmt(node, output):
 def drop_stmt(node, output):
     otypes = enums.ObjectType
     output.write('DROP ')
-    # Special case functions since they are not special objects
     output.writes(OBJECT_NAMES[node.removeType.value])
     if node.removeType == otypes.OBJECT_INDEX:
         if node.concurrent:
@@ -1505,7 +1479,7 @@ def grant_stmt(node, output):
         output.print_list(node.privileges)
     else:
         output.write('ALL PRIVILEGES')
-    object_name = OBJECT_NAMES[node.objtype.value]
+    object_name = GRANT_OBJECT_TYPES_NAMES[node.objtype.value]
     target = node.targtype
     output.newline()
     output.space(2)
@@ -1567,10 +1541,6 @@ def index_stmt(node, output):
         output.write(' (')
         output.print_list(node.indexParams)
         output.write(')')
-        if node.indexIncludingParams:
-            output.write(' INCLUDE (')
-            output.print_list(node.indexIncludingParams)
-            output.write(')')
         if node.options:
             output.newline()
             output.write('WITH (')
@@ -1617,7 +1587,7 @@ def notify_stmt(node, output):
     output.print_name(node.conditionname)
     if node.payload:
         output.write(', ')
-        output.write_quoted_string(node.payload.value)
+        output._write_quoted_string(node.payload.value)
 
 
 def _object_with_args(node, output, unquote_name=False, skip_empty_args=False):
@@ -1695,6 +1665,8 @@ def rename_stmt(node, output):
         output.write('ALTER ')
         output.write(OBJECT_NAMES[reltype])
         output.space()
+        if node.missing_ok:
+            output.write("IF EXISTS ")
         output.print_node(node.relation)
         output.write(' RENAME ')
         output.write(OBJECT_NAMES[objtype])
@@ -1710,8 +1682,6 @@ def rename_stmt(node, output):
     if objtype in (enums.ObjectType.OBJECT_SCHEMA,
                    enums.ObjectType.OBJECT_DATABASE):
         output.print_name(node.subname)
-    elif objtype == enums.ObjectType.OBJECT_TYPE:
-        output.print_name(node.object)
     elif objtype == enums.ObjectType.OBJECT_RULE:
         output.print_name(node.subname)
         output.write(' ON ')
@@ -1793,12 +1763,26 @@ def trigger_transition(node, output):
 
 @node_printer('VacuumStmt')
 def vacuum_stmt(node, output):
-    options = node.options or []
-    options = [option.defname.value.upper() for option in options]
-    if node.is_vacuumcmd:
+    optint = node.options.value
+    options = []
+    if optint & enums.VacuumOption.VACOPT_VACUUM:
+        options.append('VACUUM')
+    if optint & enums.VacuumOption.VACOPT_FULL:
+        options.append('FULL')
+    if optint & enums.VacuumOption.VACOPT_FREEZE:
+        options.append('FREEZE')
+    if optint & enums.VacuumOption.VACOPT_VERBOSE:
+        options.append('VERBOSE')
+    if optint & enums.VacuumOption.VACOPT_ANALYZE:
+        options.append('ANALYZE')
+    if optint & enums.VacuumOption.VACOPT_DISABLE_PAGE_SKIPPING:
+        options.append('DISABLE_PAGE_SKIPPING')
+    if 'VACUUM' in options:
         output.write('VACUUM ')
+        options.remove('VACUUM')
     else:
         output.write('ANALYZE ')
+        options.remove('ANALYZE')
     if options:
         # Try so emit a syntax compatible with PG < 11, if possible.
         if 'DISABLE_PAGE_SKIPPING' in options:
@@ -1807,19 +1791,15 @@ def vacuum_stmt(node, output):
             output.write(') ')
         else:
             for option in options:
-                output.swrite(option)
+                output.write(option)
                 output.space()
-    if node.rels:
-        output.print_list(node.rels, ",")
+    if node.relation:
+        output.print_node(node.relation)
+        if node.va_cols:
+            output.write('(')
+            output.print_list(node.va_cols, ',', are_names=True)
+            output.write(')')
 
-
-@node_printer('VacuumRelation')
-def vacuum_relation(node, output):
-    output.print_node(node.relation)
-    if node.va_cols:
-        output.write('(')
-        output.print_list(node.va_cols, ',', are_names=True)
-        output.write(')')
 
 @node_printer('ViewStmt')
 def view_stmt(node, output):
